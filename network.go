@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// 用go的channel模拟网络
+// 用go的channel模拟网络，感觉叫nodeList更合适，一个map包含了网络中所有节点id和它对应的chan
 type network struct {
 	// key:val   节点id:节点对应的消息通道 message queue
 	recvQueue map[int]chan Message
@@ -30,7 +30,7 @@ type nodeNetwork struct {
 }
 
 // 创建一个节点，并指定所在网络
-func (n *network) getNodeNetwork(id int) nodeNetwork {
+func (n *network) addNodeToNetwork(id int) nodeNetwork {
 	return nodeNetwork{id: id, net: n}
 }
 
@@ -40,7 +40,7 @@ func (n *network) sendTo(m Message) {
 	n.recvQueue[m.to] <- m
 }
 
-// 接受消息
+// 接受消息，入参：发送Msg的节点id(hashMap查表嘛，取出对应的chan)，出参：取出节点id对应的chan的Msg
 func (n *network) recvFrom(id int) *Message {
 	select {
 	case retMsg := <-n.recvQueue[id]:

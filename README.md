@@ -20,3 +20,9 @@ http://thesecretlivesofdata.com/raft/
 
 
 
+
+
+## Issuse:
+
+代码中的随机超时时间  `expiredTime` 好像没用到？
+

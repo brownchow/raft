@@ -35,7 +35,7 @@ type RaftServer struct {
 	role        Role
 	nt          nodeNetwork
 	msgRecvTime time.Time //Message receive time
-	nodeList    []int     //id list exist in this network.
+	nodeList    []int     //id list exist in this network.包括自身
 	term        int       //term about current time seq
 	db          submittedItems
 
@@ -52,13 +52,13 @@ func NewServer(id int, role Role, nt nodeNetwork, nodeList ...int) *RaftServer {
 	expiredMiliSec := rand.Intn(5) + 1
 	serv := &RaftServer{
 		id:          id,
-		role:        role,
+		role:        role, // 指定角色，默认都是follower
 		nt:          nt,
-		expiredTime: expiredMiliSec, //随机的过期时间
+		expiredTime: expiredMiliSec, //随机的过期时间，感觉代码有问题啊，expiredTime这个参数根本没用到
 		isAlive:     true,
 		nodeList:    nodeList,
 		db:          submittedItems{}}
-	// 起一个goroutine  去执行serverLoop
+	// 起一个goroutine在后台运行，去执行serverLoop
 	go serv.runServerLoop()
 	return serv
 }
@@ -78,14 +78,15 @@ func (sev *RaftServer) AppendEntries(action datalog) {
 }
 
 //Whoareyou :Check rule function for testing verification.
-func (sev *RaftServer) Whoareyou() Role {
+func (sev *RaftServer) WhoAreYou() Role {
 	return sev.role
 }
 
-// 启动服务器循环
+// 启动服务器死循环
 func (sev *RaftServer) runServerLoop() {
 
 	for {
+		// 不需要break语句
 		switch sev.role {
 		case Leader:
 			sev.runLeaderLoop()
@@ -94,32 +95,34 @@ func (sev *RaftServer) runServerLoop() {
 		case Follower:
 			sev.runFollowerLoop()
 		}
-
 		//timer base on milli-second.
 		time.Sleep(100 * time.Millisecond)
 	}
 }
 
-//For flower -> candidate
-func (sev *RaftServer) requestVote(action datalog) {
-	m := Message{from: sev.id,
+//For flower -> candidate，超时时间到，从follower变成candidate，首先给自己投票，然后让集群中的其他节点给自己投票
+func (srv *RaftServer) requestVote(action datalog) {
+	m := Message{
+		from:         srv.id,
 		typ:          RequestVote,
 		val:          action,
-		term:         sev.term,
-		lastLogIndex: 0}
-	for _, node := range sev.nodeList {
-		m.to = node
-		sev.nt.send(m)
+		term:         srv.term,
+		lastLogIndex: 0,
 	}
-
+	// 给网络中包括自身在内的所有节点发送RequestVote Message
+	for _, node := range srv.nodeList {
+		m.to = node
+		srv.nt.send(m)
+	}
+	// 一般情况下，所有节点都会返回同意，因此肯定超过一半的节点同意，直接变成candidate
 	//Send request Vote and change self to Candidate.
-	sev.roleChange(Candidate)
-	log.Println("Now ID:", sev.id, " become candidate->", sev.role)
+	srv.roleChange(Candidate)
+	log.Println("Now ID:", srv.id, " become candidate->", srv.role)
 }
 
 func (sev *RaftServer) sendHearbit() {
 	latestData := sev.db.getLatestLogs()
-	// 给网络中除自身以外的所有节点发送心跳信息
+	// 给网络中除自身以外的所有节点发送心跳信息，附带最新的log
 	for _, node := range sev.nodeList {
 		hbMsg := Message{from: sev.id, to: node, typ: Heartbeat, val: *latestData}
 		sev.nt.send(hbMsg)
@@ -129,9 +132,9 @@ func (sev *RaftServer) sendHearbit() {
 // leader节点要做的事情
 func (sev *RaftServer) runLeaderLoop() {
 	log.Println("ID:", sev.id, " Run leader loop")
-	//
+	//leader给follower发送心跳信息
 	sev.sendHearbit()
-
+	//从自身的chan中接收其他节点回复的信息
 	recevMsg := sev.nt.recv()
 	if recevMsg == nil {
 		return
@@ -142,6 +145,7 @@ func (sev *RaftServer) runLeaderLoop() {
 		return
 
 	case HeartbeatFeedback:
+		// 正常应该返回这种信息
 		//TODO. notthing happen in this.
 		return
 
@@ -155,9 +159,11 @@ func (sev *RaftServer) runLeaderLoop() {
 	//TODO. if get bigger TERM request, back to follower
 }
 
+// candidate节点应该做的事情
 func (sev *RaftServer) runCandidateLoop() {
 	log.Println("ID:", sev.id, " Run candidate loop")
 	//TODO. send RequestVote to all others
+	// 从自身chan中接收Msg
 	recvMsg := sev.nt.recv()
 
 	if recvMsg == nil {
@@ -173,6 +179,7 @@ func (sev *RaftServer) runCandidateLoop() {
 		return
 	case AcceptVote:
 		sev.acceptVoteMsg = append(sev.acceptVoteMsg, *recvMsg)
+		// candidate 接收到集群中超过半数节点的投票，就转变成leader角色
 		log.Println("[candidate]: has ", len(sev.acceptVoteMsg), " still not reach ", sev.majorityCount())
 		if len(sev.acceptVoteMsg) >= sev.majorityCount() {
 			sev.roleChange(Leader)
@@ -196,10 +203,12 @@ func (sev *RaftServer) runCandidateLoop() {
 	//TODO. If not, back to follower
 }
 
+// follower节点应该做的事情
 func (sev *RaftServer) runFollowerLoop() {
 	log.Println("ID:", sev.id, " Run follower loop")
 
 	//TODO. check if leader no heartbeat to change to candidate.
+
 	recvMsg := sev.nt.recv()
 
 	if recvMsg == nil {
